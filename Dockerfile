@@ -52,4 +52,20 @@ RUN mkdir -p /home/steam/steamcmd \
 RUN mkdir -p /home/steam/.steam/sdk64
 
 COPY --chown=steam:steam entrypoint.sh /usr/local/bin/entrypoint
+
+# Declared here as well as defaulted in the entrypoint, so `docker inspect`
+# shows which knobs exist. Without this the image looks like it takes no
+# configuration at all.
+ENV PAL_NAME="GameCTL Palworld" \
+    PAL_PORT=8211 \
+    PAL_QUERY_PORT=27015 \
+    PAL_MAX_PLAYERS=16 \
+    PAL_PUBLIC=false
+
+# Game and query are SEPARATE UDP ports and both must be reachable. The query
+# port is what the in-game browser probes: forward only the game port and
+# players can still join by direct IP while the server never lists.
+EXPOSE 8211/udp
+EXPOSE 27015/udp
+
 ENTRYPOINT ["/usr/local/bin/entrypoint"]
