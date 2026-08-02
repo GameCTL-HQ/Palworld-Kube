@@ -25,6 +25,27 @@ log(){ echo "gamectl: $*"; }
 mkdir -p "$DATA"
 log "entrypoint starting (data: $DATA)"
 
+# steamcmd bootstraps and self-updates on first run, and the very first
+# app_update after that update can fail before the client has finished
+# configuring itself -- observed on a real first boot as:
+#
+#   ERROR! Failed to install app '2394010' (Missing configuration)
+#
+# It succeeds on a retry. Without this loop the only thing that saves the
+# install is the container exiting and the kubelet restarting it, which
+# works but looks like a crash and burns the whole pod startup each time.
+# Retrying in place is the same approach Barotrauma-Kube uses.
+steamcmd_run() {
+  local i
+  for i in 1 2 3 4 5; do
+    "$STEAMCMD" +force_install_dir "$DATA" +login anonymous +app_update "$APPID" validate +quit && return 0
+    log "steamcmd attempt $i failed - clearing appcache and retrying"
+    rm -rf "$HOME/Steam/appcache" 2>/dev/null || true
+    sleep 10
+  done
+  return 1
+}
+
 # ---------------------------------------------------------------- install/update
 MODE=""
 if [ ! -f "$INSTALLED" ]; then
@@ -38,14 +59,15 @@ if [ -z "$MODE" ]; then
 else
   if [ "$MODE" = "install" ]; then
     log "first Palworld install on the volume — running steamcmd app_update $APPID"
-    # Fatal on purpose: there is no game to fall back to.
-    "$STEAMCMD" +force_install_dir "$DATA" +login anonymous +app_update "$APPID" validate +quit
+    # Fatal only after the retries are exhausted: there is no game to fall
+    # back to, so a genuinely failed first install must not start the server.
+    steamcmd_run || { log "ERROR: first install failed after retries" >&2; exit 1; }
     touch "$INSTALLED"
   else
     log "update requested — running steamcmd app_update $APPID validate"
     # NOT fatal: an already-installed server should still come up if Steam is
     # having a bad day. See the header note about the CS2 restart loop.
-    if "$STEAMCMD" +force_install_dir "$DATA" +login anonymous +app_update "$APPID" validate +quit; then
+    if steamcmd_run; then
       log "update completed"
     else
       log "WARNING: update FAILED — starting on the existing install."
