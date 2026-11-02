@@ -1,0 +1,47 @@
+#!/usr/bin/env python3
+"""Authenticated, loopback-only Palworld REST readiness probe."""
+
+from __future__ import annotations
+
+import base64
+import json
+import os
+from pathlib import Path
+import stat
+import sys
+import urllib.error
+import urllib.request
+
+
+def main() -> int:
+    data = Path(os.environ.get("PAL_DATA", "/palworld"))
+    credential = data / ".gamectl-palworld-admin-password"
+    try:
+        mode = stat.S_IMODE(credential.stat().st_mode)
+        if mode != 0o600:
+            raise ValueError("credential mode is not 0600")
+        password = credential.read_text(encoding="utf-8")
+        if not password or "\n" in password or "\r" in password:
+            raise ValueError("invalid credential")
+        token = base64.b64encode(f"admin:{password}".encode("utf-8")).decode("ascii")
+        port = int(os.environ.get("PAL_REST_PORT", "8212"))
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{port}/v1/api/info",
+            headers={"Authorization": f"Basic {token}"},
+            method="GET",
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            payload = response.read(1024 * 1024 + 1)
+            if len(payload) > 1024 * 1024:
+                raise ValueError("response too large")
+        parsed = json.loads(payload)
+        if not isinstance(parsed, dict):
+            raise ValueError("response is not an object")
+        return 0
+    except (OSError, ValueError, UnicodeError, json.JSONDecodeError, urllib.error.URLError):
+        print("palworld readiness failed", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

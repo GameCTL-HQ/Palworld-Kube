@@ -28,6 +28,7 @@ RUN dpkg --add-architecture i386 \
       curl \
       lib32gcc-s1 \
       libc6-i386 \
+      python3-minimal \
       xdg-user-dirs \
       procps \
       tzdata \
@@ -52,6 +53,9 @@ RUN mkdir -p /home/steam/steamcmd \
 RUN mkdir -p /home/steam/.steam/sdk64
 
 COPY --chown=steam:steam entrypoint.sh /usr/local/bin/entrypoint
+COPY --chown=steam:steam palworld-config /usr/local/bin/palworld-config
+COPY --chown=steam:steam palworld-readiness /usr/local/bin/palworld-readiness
+RUN chmod 0755 /usr/local/bin/entrypoint /usr/local/bin/palworld-config /usr/local/bin/palworld-readiness
 
 # Declared here as well as defaulted in the entrypoint, so `docker inspect`
 # shows which knobs exist. Without this the image looks like it takes no
@@ -59,6 +63,7 @@ COPY --chown=steam:steam entrypoint.sh /usr/local/bin/entrypoint
 ENV PAL_NAME="GameCTL Palworld" \
     PAL_PORT=8211 \
     PAL_QUERY_PORT=27015 \
+    PAL_REST_PORT=8212 \
     PAL_MAX_PLAYERS=16 \
     PAL_PUBLIC=false
 

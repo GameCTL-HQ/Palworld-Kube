@@ -1,0 +1,117 @@
+#!/usr/bin/env python3
+"""Safely update Palworld's single-line OptionSettings tuple.
+
+Updates are read as NUL-delimited key/type/value triples on stdin so secrets
+never appear in process arguments. Type is either "string" or "raw".
+"""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+import sys
+import tempfile
+
+
+def fail(message: str) -> "NoReturn":
+    print(f"palworld-config: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def split_fields(body: str) -> list[str]:
+    fields: list[str] = []
+    start = 0
+    quoted = False
+    escaped = False
+    for index, char in enumerate(body):
+        if quoted:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                quoted = False
+        elif char == '"':
+            quoted = True
+        elif char == ",":
+            fields.append(body[start:index])
+            start = index + 1
+    if quoted:
+        fail("unterminated quoted value in OptionSettings")
+    fields.append(body[start:])
+    return fields
+
+
+def render(kind: str, value: str) -> str:
+    if "\n" in value or "\r" in value:
+        fail("configuration values must not contain newlines")
+    if kind == "raw":
+        return value
+    if kind != "string":
+        fail("unknown value type")
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def main() -> None:
+    if len(sys.argv) != 2:
+        fail("usage: palworld-config INI_PATH")
+    ini = Path(sys.argv[1])
+    payload = sys.stdin.buffer.read()
+    parts = payload.split(b"\0")
+    if parts and parts[-1] == b"":
+        parts.pop()
+    if not parts or len(parts) % 3:
+        fail("invalid update stream")
+    try:
+        updates = [part.decode("utf-8") for part in parts]
+    except UnicodeDecodeError:
+        fail("configuration values must be UTF-8")
+
+    text = ini.read_text(encoding="utf-8")
+    lines = text.splitlines(keepends=True)
+    matches = [i for i, line in enumerate(lines) if line.rstrip("\r\n").startswith("OptionSettings=(")]
+    if len(matches) != 1:
+        fail("expected exactly one OptionSettings line")
+    index = matches[0]
+    ending = "\n" if lines[index].endswith("\n") else ""
+    line = lines[index].rstrip("\r\n")
+    prefix = "OptionSettings=("
+    if not line.startswith(prefix) or not line.endswith(")"):
+        fail("malformed OptionSettings line")
+    fields = split_fields(line[len(prefix):-1])
+
+    for offset in range(0, len(updates), 3):
+        key, kind, value = updates[offset:offset + 3]
+        if not key or any(char not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_" for char in key):
+            fail("invalid key")
+        replacement = f"{key}={render(kind, value)}"
+        found = [i for i, field in enumerate(fields) if field.lstrip().startswith(key + "=")]
+        if len(found) > 1:
+            fail(f"duplicate {key} setting")
+        if found:
+            leading = fields[found[0]][:len(fields[found[0]]) - len(fields[found[0]].lstrip())]
+            fields[found[0]] = leading + replacement
+        else:
+            fields.append(replacement)
+
+    lines[index] = prefix + ",".join(fields) + ")" + ending
+    result = "".join(lines)
+    fd, temporary = tempfile.mkstemp(prefix=".palworld-settings-", dir=ini.parent)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+            handle.write(result)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, ini)
+        os.chmod(ini, 0o600)
+    except BaseException:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+if __name__ == "__main__":
+    main()

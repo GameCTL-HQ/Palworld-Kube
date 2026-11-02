@@ -18,7 +18,9 @@ queryport="${PAL_QUERY_PORT:-27015}"
 maxplayers="${PAL_MAX_PLAYERS:-16}"
 public="${PAL_PUBLIC:-false}"
 serverpass="${PAL_PASSWORD:-}"
-adminpass="${PAL_ADMIN_PASSWORD:-}"
+restport="${PAL_REST_PORT:-8212}"
+adminpassfile="$DATA/.gamectl-palworld-admin-password"
+adminpasssource="${PAL_ADMIN_PASSWORD_FILE:-/run/secrets/palworld-admin/admin-password}"
 
 log(){ echo "gamectl: $*"; }
 
@@ -96,20 +98,60 @@ if [ ! -s "$CFG/PalWorldSettings.ini" ]; then
     exit 1
   fi
 fi
+chmod 600 "$CFG/PalWorldSettings.ini"
+
+# Palworld's authenticated REST /info endpoint is the native serving signal.
+# The persistent 0600 file is canonical on every boot. A mounted Kubernetes
+# Secret seeds/rotates it without putting the credential in Deployment env or
+# argv. PAL_ADMIN_PASSWORD remains a compatibility input for direct image users,
+# but GameCTL does not render it.
+read_secret_file() {
+  local value
+  value="$(cat "$1"; printf x)"
+  value="${value%x}"
+  case "$value" in
+    *$'\n'*|*$'\r'*) log "ERROR: admin credential must not contain a newline" >&2; exit 1 ;;
+  esac
+  [ -n "$value" ] || { log "ERROR: admin credential is empty" >&2; exit 1; }
+  printf '%s' "$value"
+}
+
+adminpass=""
+if [ -f "$adminpasssource" ]; then
+  adminpass="$(read_secret_file "$adminpasssource")"
+elif [ -n "${PAL_ADMIN_PASSWORD:-}" ]; then
+  case "$PAL_ADMIN_PASSWORD" in
+    *$'\n'*|*$'\r'*) log "ERROR: admin credential must not contain a newline" >&2; exit 1 ;;
+  esac
+  adminpass="$PAL_ADMIN_PASSWORD"
+elif [ -s "$adminpassfile" ]; then
+  adminpass="$(read_secret_file "$adminpassfile")"
+else
+  adminpass="$(od -An -N24 -tx1 /dev/urandom | tr -d ' \n')"
+fi
+
+credentialtmp="$adminpassfile.tmp.$$"
+( umask 077; printf '%s' "$adminpass" > "$credentialtmp" )
+chmod 600 "$credentialtmp"
+mv -f "$credentialtmp" "$adminpassfile"
+chmod 600 "$adminpassfile"
 
 # Rewrite only the env-managed keys, in place, on every boot. GameCTL owns
 # these; everything else in the ini belongs to whoever is running the server.
-set_opt(){ # key value -> replace Key=... inside OptionSettings=(...)
-  local k="$1" v="$2"
-  if grep -q "${k}=" "$CFG/PalWorldSettings.ini"; then
-    sed -i -E "s/${k}=[^,)]*/${k}=${v}/" "$CFG/PalWorldSettings.ini"
-  fi
-}
-set_opt ServerName "\"${name//\"/}\""
-set_opt ServerPlayerMaxNum "$maxplayers"
-set_opt PublicPort "$port"
-set_opt ServerPassword "\"${serverpass//\"/}\""
-set_opt AdminPassword "\"${adminpass//\"/}\""
+{
+  printf '%s\0%s\0%s\0' ServerName string "$name"
+  printf '%s\0%s\0%s\0' ServerPlayerMaxNum raw "$maxplayers"
+  printf '%s\0%s\0%s\0' PublicPort raw "$port"
+  printf '%s\0%s\0%s\0' ServerPassword string "$serverpass"
+  printf '%s\0%s\0%s\0' AdminPassword string "$adminpass"
+  printf '%s\0%s\0%s\0' RESTAPIEnabled raw True
+  printf '%s\0%s\0%s\0' RESTAPIPort raw "$restport"
+} | "${PAL_CONFIG_HELPER:-/usr/local/bin/palworld-config}" "$CFG/PalWorldSettings.ini"
+chmod 600 "$CFG/PalWorldSettings.ini"
+
+# Test seam: exercise install-skip, credential convergence, and INI handling
+# without launching PalServer on a build or review host.
+[ "${PAL_CONFIG_ONLY:-0}" = "1" ] && exit 0
 
 log "starting Palworld '${name}' on ${port}/udp (query ${queryport}, public=${public}, max ${maxplayers})"
 

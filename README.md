@@ -31,14 +31,22 @@ server never appears in any list. This is a common way to lose an afternoon.
 | `PAL_NAME` | `GameCTL Palworld` | display name in the server list |
 | `PAL_PORT` | `8211` | game port; also written to `PalWorldSettings.ini` |
 | `PAL_QUERY_PORT` | `27015` | query port |
+| `PAL_REST_PORT` | `8212` | internal-only native REST readiness port |
 | `PAL_MAX_PLAYERS` | `16` | |
 | `PAL_PUBLIC` | `false` | `true` adds `-publiclobby` |
 | `PAL_PASSWORD` | *(unset)* | join password |
-| `PAL_ADMIN_PASSWORD` | *(unset)* | admin password |
+| `PAL_ADMIN_PASSWORD_FILE` | `/run/secrets/palworld-admin/admin-password` | optional mounted admin-password file |
+| `PAL_ADMIN_PASSWORD` | *(unset)* | compatibility input for direct image use; prefer the file |
 | `GAMECTL_UPDATE_REQUEST` | *(unset)* | one-shot update token; changing it triggers one `app_update` |
 
 These are re-applied to `PalWorldSettings.ini` on **every boot**, so editing that
 file by hand on the volume is overwritten at startup — set them here instead.
+The entrypoint converges the mounted or generated admin credential into the
+persistent `.gamectl-palworld-admin-password` file and enforces mode `0600` on
+that file and `PalWorldSettings.ini` on every boot. Newlines are rejected;
+punctuation and whitespace are preserved exactly. The authenticated
+`/v1/api/info` endpoint is used for readiness without putting the credential in
+probe arguments or logs; REST port 8212 must not be published to the Internet.
 
 ## Update behaviour
 
