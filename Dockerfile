@@ -28,7 +28,7 @@ RUN dpkg --add-architecture i386 \
       curl \
       lib32gcc-s1 \
       libc6-i386 \
-      python3-minimal \
+      python3 \
       xdg-user-dirs \
       procps \
       tzdata \

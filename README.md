@@ -48,6 +48,12 @@ punctuation and whitespace are preserved exactly. The authenticated
 `/v1/api/info` endpoint is used for readiness without putting the credential in
 probe arguments or logs; REST port 8212 must not be published to the Internet.
 
+After building the image, run `./test-built-image.sh IMAGE`. The regression
+bypasses the game-server entrypoint and runs the installed readiness helper
+against a bounded, authenticated loopback fixture inside the built image. This
+also verifies that the image contains the helper's complete Python standard
+library rather than only the minimal interpreter.
+
 ## Update behaviour
 
 A failed **update** is not fatal: the server logs a warning and starts on the
